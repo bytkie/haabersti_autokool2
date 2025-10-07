@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Хост: 127.0.0.1
--- Время создания: Окт 07 2025 г., 19:20
+-- Время создания: Окт 07 2025 г., 20:15
 -- Версия сервера: 10.4.32-MariaDB
 -- Версия PHP: 8.2.12
 
@@ -20,6 +20,26 @@ SET time_zone = "+00:00";
 --
 -- База данных: `haabersti_autokool`
 --
+
+-- --------------------------------------------------------
+
+--
+-- Структура таблицы `admins`
+--
+
+CREATE TABLE `admins` (
+  `id` int(11) NOT NULL,
+  `username` varchar(50) NOT NULL,
+  `password_hash` varchar(255) NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Дамп данных таблицы `admins`
+--
+
+INSERT INTO `admins` (`id`, `username`, `password_hash`, `created_at`) VALUES
+(1, 'bytkie', '$2y$12$FeYqg2KrblH6mHmlW/xpfuAJlQ9h/NxZHPyhskKznplDewgOYV', '2025-10-07 17:44:01');
 
 -- --------------------------------------------------------
 
@@ -156,6 +176,13 @@ CREATE TABLE `reviews` (
 --
 
 --
+-- Индексы таблицы `admins`
+--
+ALTER TABLE `admins`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `username` (`username`);
+
+--
 -- Индексы таблицы `bookings`
 --
 ALTER TABLE `bookings`
@@ -198,6 +225,12 @@ ALTER TABLE `reviews`
 --
 -- AUTO_INCREMENT для сохранённых таблиц
 --
+
+--
+-- AUTO_INCREMENT для таблицы `admins`
+--
+ALTER TABLE `admins`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
 
 --
 -- AUTO_INCREMENT для таблицы `bookings`

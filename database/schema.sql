@@ -77,6 +77,15 @@ CREATE TABLE contact_messages (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS admins (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(50) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+
+insert into admins (username, password_hash) VALUES ("bytkie", "bserg_5xg3D11")
 -- Вставка тестовых данных для курсов
 INSERT INTO courses (name, description, category, duration, lessons, price, image) VALUES
 ('Базовый курс категории B', 'Полный курс обучения вождению для получения прав категории B. Включает теорию и практику.', 'Категория B', 40, 30, 450.00, 'course-basic-b.jpg'),
@@ -99,6 +108,8 @@ INSERT INTO reviews (author_name, content, rating, approved, created_at) VALUES
 ('Ольга М.', 'Мария - замечательный инструктор! Очень спокойная и объясняет все понятно. Спасибо за терпение!', 5, TRUE, '2024-09-25 16:45:00'),
 ('Владимир С.', 'Восстанавливал навыки после 5-летнего перерыва. Елена помогла быстро вернуть уверенность за рулем.', 4, TRUE, '2024-10-01 11:20:00'),
 ('Татьяна Л.', 'Очень довольна обучением. Современные автомобили, удобное расписание. Всем рекомендую!', 5, TRUE, '2024-10-03 13:10:00');
+
+
 
 -- Создание индексов для оптимизации
 CREATE INDEX idx_courses_active ON courses(active);

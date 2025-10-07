@@ -1,20 +1,13 @@
 <?php
-// admin.php — Haabersti Autokool
 declare(strict_types=1);
+ini_set('display_errors', '1');
+ini_set('display_startup_errors', '1');
+error_reporting(E_ALL);
 session_start();
 
-// =======================
-// 1) Настройки авторизации
-// =======================
-// Можно задать через переменные окружения (рекомендуется):
-// setx ADMIN_USER admin
-// setx ADMIN_HASH <bcrypt-хеш>
-// Ниже дефолт: логин admin / пароль haabersti2024 (сменить!)
-$ADMIN_USER = getenv('ADMIN_USER') ?: 'admin';
-$ADMIN_HASH = getenv('ADMIN_HASH') ?: '$2y$12$e2RozsdMVWAVDflAcYNJE.LGp2AOy4xVSx5hgkmAFczIJ4o0l6.pa'; // hash('haabersti2024')
 
 // =======================
-// 2) Утилиты
+// 0) Утилиты
 // =======================
 function e(string $s): string { return htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
 function flash(string $type, string $msg): void { $_SESSION['flash'][] = [$type, $msg]; }
@@ -23,34 +16,72 @@ function csrf_token(): string {
     return $_SESSION['csrf'];
 }
 function csrf_check(): bool {
-    return isset($_POST['csrf']) && isset($_SESSION['csrf']) && hash_equals($_SESSION['csrf'], (string)$_POST['csrf']);
-}
-function require_admin(): void {
-    if (empty($_SESSION['admin_logged_in'])) {
-        header('Location: admin.php'); exit;
-    }
+    return isset($_POST['csrf'], $_SESSION['csrf']) && hash_equals($_SESSION['csrf'], (string)$_POST['csrf']);
 }
 
 // =======================
-// 3) ЛОГИН/ЛОГАУТ
+// 1) Подключение БД
+// =======================
+require __DIR__ . '/config/database.php';
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+
+
+// --- bootstrap: если нет ни одного админа — создаём дефолтного
+$adminsCount = (int)$conn->query("SELECT COUNT(*) AS c FROM admins")->fetch_assoc()['c'];
+if ($adminsCount === 0) {
+    $defaultUser = 'admin';
+    $defaultPass = 'haabersti2024';
+    $hash = password_hash($defaultPass, PASSWORD_DEFAULT);
+    $st = $conn->prepare("INSERT INTO admins (username, password_hash) VALUES (?, ?)");
+    $st->bind_param('ss', $defaultUser, $hash);
+    $st->execute();
+    $_SESSION['bootstrap_notice'] = "Создан администратор: <b>admin / haabersti2024</b>...";
+}
+
+// =======================
+// 2) Логаут
 // =======================
 if (isset($_GET['logout'])) {
     session_destroy();
     header('Location: admin.php'); exit;
 }
 
+// =======================
+// 3) Логин (через таблицу admins)
+// =======================
 if (empty($_SESSION['admin_logged_in'])) {
+    $error = '';
+
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
         $u = trim($_POST['username'] ?? '');
         $p = (string)($_POST['password'] ?? '');
-        if (hash_equals($ADMIN_USER, $u) && password_verify($p, $ADMIN_HASH)) {
-            $_SESSION['admin_logged_in'] = true;
-            $_SESSION['admin_username'] = $u;
-            header('Location: admin.php'); exit;
+
+        // ищем пользователя по username (case-sensitive/insensitive — зависит от collation; можно принудить BINARY, если нужно строго)
+        $st = $conn->prepare("SELECT id, username, password_hash FROM admins WHERE username = ?");
+        $st->bind_param('s', $u);
+        $st->execute();
+        $res = $st->get_result();
+
+        if ($row = $res->fetch_assoc()) {
+            if (password_verify($p, $row['password_hash'])) {
+                // опционально: если алгоритм устарел — пересчитать хеш
+                if (password_needs_rehash($row['password_hash'], PASSWORD_DEFAULT)) {
+                    $newHash = password_hash($p, PASSWORD_DEFAULT);
+                    $st2 = $conn->prepare("UPDATE admins SET password_hash=? WHERE id=?");
+                    $st2->bind_param('si', $newHash, $row['id']);
+                    $st2->execute();
+                }
+                $_SESSION['admin_logged_in'] = true;
+                $_SESSION['admin_username']  = $row['username'];
+                header('Location: admin.php'); exit;
+            } else {
+                $error = 'Неверный логин или пароль';
+            }
         } else {
-            $error = 'Неверный логин или пароль';
+            $error = 'Пользователь не найден';
         }
     }
+
     // Форма логина
     ?>
     <!doctype html><html lang="ru"><head>
@@ -61,13 +92,18 @@ if (empty($_SESSION['admin_logged_in'])) {
       .login-container{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%)}
       .login-form{background:#fff;padding:2rem;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.2);width:100%;max-width:420px}
       .login-form h1{text-align:center;margin-bottom:1.2rem;color:#2c3e50}
-      .error{background:#f8d7da;color:#721c24;padding:1rem;border-radius:6px;margin-bottom:1rem}
+      .alert{padding:1rem;border-radius:8px;margin-bottom:1rem}
+      .alert-danger{background:#f8d7da;color:#721c24}
+      .alert-info{background:#d1ecf1;color:#0c5460}
     </style>
     </head><body>
       <div class="login-container">
         <div class="login-form">
           <h1>Админ панель</h1>
-          <?php if (!empty($error)): ?><div class="error"><?= e($error) ?></div><?php endif; ?>
+          <?php if (!empty($_SESSION['bootstrap_notice'])): ?>
+            <div class="alert alert-info"><?= $_SESSION['bootstrap_notice']; unset($_SESSION['bootstrap_notice']); ?></div>
+          <?php endif; ?>
+          <?php if ($error): ?><div class="alert alert-danger"><?= e($error) ?></div><?php endif; ?>
           <form method="post" autocomplete="off">
             <div class="form-group"><label for="username">Логин</label>
               <input type="text" id="username" name="username" required></div>
@@ -75,9 +111,7 @@ if (empty($_SESSION['admin_logged_in'])) {
               <input type="password" id="password" name="password" required></div>
             <button type="submit" name="login" class="btn btn-primary btn-full">Войти</button>
           </form>
-          <p style="margin-top:12px;color:#7f8c8d;font-size:.9rem">
-            <b>Важно:</b> поменяй пароль! Сгенерируй хеш: <code>password_hash('новый', PASSWORD_BCRYPT)</code> и положи его в переменную окружения <code>ADMIN_HASH</code>.
-          </p>
+          
         </div>
       </div>
     </body></html>
@@ -86,13 +120,7 @@ if (empty($_SESSION['admin_logged_in'])) {
 }
 
 // =======================
-// 4) БД
-// =======================
-require __DIR__ . '/config/test-db.php';
-mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
-
-// =======================
-// 5) Обработка POST (с CSRF)
+// 4) Обработка POST (с CSRF) — Бизнес-логика панели
 // =======================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if (!csrf_check()) { flash('error','Сессия устарела. Обновите страницу.'); header('Location: admin.php'); exit; }
@@ -114,13 +142,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     break;
                 }
                 $sql = "INSERT INTO courses (name, description, category, duration, lessons, price, image, active, created_at)
-                        VALUES (?,?,?,?,?,?,?,?,NOW())";
+                        VALUES (?,?,?,?,?,?,?, ?, NOW())";
                 $stmt = $conn->prepare($sql);
-                $stmt->bind_param('sssii dsi', $name, $description, $category, $duration, $lessons, $price, $image, $active);
-                // корректная строка типов:
-                // s (name) s (desc) s (category) i (duration) i (lessons) d (price) s (image) i (active)
-                $stmt->bind_param('sssii dsi', $name, $description, $category, $duration, $lessons, $price, $image, $active); // подсказка редакторам
-                // PHP не любит пробел в типах — ставим правильную:
+                // types: s s s i i d s i
                 $stmt->bind_param('sssiidsi', $name, $description, $category, $duration, $lessons, $price, $image, $active);
                 $stmt->execute();
                 flash('success','Курс успешно добавлен.');
@@ -156,21 +180,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $stmt->execute();
                 flash('success','Статус сообщения обновлён.');
                 break;
+
+            // --- управление администраторами (опционально) ---
+            case 'add_admin':
+                $u = trim($_POST['new_username'] ?? '');
+                $p = (string)($_POST['new_password'] ?? '');
+                if ($u==='' || $p==='') { flash('error','Логин и пароль обязательны.'); break; }
+                $hash = password_hash($p, PASSWORD_DEFAULT);
+                $st = $conn->prepare("INSERT INTO admins (username, password_hash) VALUES (?, ?)");
+                $st->bind_param('ss', $u, $hash);
+                $st->execute();
+                flash('success',"Админ «{$u}» добавлен.");
+                break;
+
+            case 'change_password':
+                $old = (string)($_POST['old_password'] ?? '');
+                $new = (string)($_POST['new_password'] ?? '');
+                if ($new==='') { flash('error','Новый пароль пуст.'); break; }
+
+                $u = $_SESSION['admin_username'] ?? '';
+                $st = $conn->prepare("SELECT id, password_hash FROM admins WHERE username=?");
+                $st->bind_param('s',$u); $st->execute();
+                $row = $st->get_result()->fetch_assoc();
+                if (!$row || !password_verify($old, $row['password_hash'])) { flash('error','Старый пароль неверен.'); break; }
+
+                $newHash = password_hash($new, PASSWORD_DEFAULT);
+                $st2 = $conn->prepare("UPDATE admins SET password_hash=? WHERE id=?");
+                $st2->bind_param('si',$newHash,$row['id']);
+                $st2->execute();
+                flash('success','Пароль обновлён.');
+                break;
         }
     } catch (Throwable $t) {
         flash('error','Ошибка: '.$t->getMessage());
     }
 
-    $back = strtok($_SERVER['HTTP_REFERER'] ?? 'admin.php','?');
-    header('Location: admin.php?'.http_build_query(['tab'=>($_GET['tab'] ?? $_POST['tab'] ?? 'dashboard')])); exit;
+    $tab = $_GET['tab'] ?? $_POST['tab'] ?? 'dashboard';
+    header('Location: admin.php?tab='.$tab); exit;
 }
 
 // =======================
-// 6) Данные для экранов
+// 5) Данные для экранов
 // =======================
 $tab = $_GET['tab'] ?? 'dashboard';
 
-// Статистика
 $stats = [
   'total_courses'    => 0,
   'pending_bookings' => 0,
@@ -185,7 +238,6 @@ $res = $conn->query("SELECT
 ");
 if ($res) { $stats = $res->fetch_assoc(); }
 
-// Пагинация helper
 function paginate(string $param='page', int $per=10): array {
     $page = max(1, (int)($_GET[$param] ?? 1));
     $offset = ($page-1)*$per;
@@ -202,31 +254,30 @@ function fetch_bookings(mysqli $conn, int $limit, int $offset): array {
     $st->bind_param('ii',$limit,$offset);
     $st->execute();
     $rows = $st->get_result()->fetch_all(MYSQLI_ASSOC);
-    $total = $conn->query("SELECT FOUND_ROWS() as t")->fetch_assoc()['t'] ?? 0;
-    return [$rows,(int)$total];
+    $total = (int)($conn->query("SELECT FOUND_ROWS() as t")->fetch_assoc()['t'] ?? 0);
+    return [$rows,$total];
 }
 
 function fetch_reviews_pending(mysqli $conn): array {
-    $q="SELECT * FROM reviews WHERE approved=0 ORDER BY created_at DESC";
-    return $conn->query($q)->fetch_all(MYSQLI_ASSOC);
+    return $conn->query("SELECT * FROM reviews WHERE approved=0 ORDER BY created_at DESC")->fetch_all(MYSQLI_ASSOC);
 }
 
 function fetch_courses(mysqli $conn): array {
-    $q="SELECT * FROM courses ORDER BY created_at DESC";
-    return $conn->query($q)->fetch_all(MYSQLI_ASSOC);
+    return $conn->query("SELECT * FROM courses ORDER BY created_at DESC")->fetch_all(MYSQLI_ASSOC);
 }
 
 function fetch_messages(mysqli $conn, int $limit, int $offset, string $only=''): array {
     $where = '';
-    if (in_array($only,['new','read','replied'],true)) $where="WHERE status='".$conn->real_escape_string($only)."'";
+    if (in_array($only,['new','read','replied'],true)) {
+        $where="WHERE status='".$conn->real_escape_string($only)."'";
+    }
     $q="SELECT SQL_CALC_FOUND_ROWS * FROM contact_messages $where ORDER BY created_at DESC LIMIT ? OFFSET ?";
     $st=$conn->prepare($q); $st->bind_param('ii',$limit,$offset); $st->execute();
     $rows=$st->get_result()->fetch_all(MYSQLI_ASSOC);
-    $total = $conn->query("SELECT FOUND_ROWS() as t")->fetch_assoc()['t'] ?? 0;
-    return [$rows,(int)$total];
+    $total = (int)($conn->query("SELECT FOUND_ROWS() as t")->fetch_assoc()['t'] ?? 0);
+    return [$rows,$total];
 }
 
-// Подгрузка по табам
 [$bPage,$bPer,$bOff] = paginate('bpage',10);
 [$bookings,$bookingsTotal] = ($tab==='bookings'||$tab==='dashboard') ? fetch_bookings($conn,$bPer,$bOff) : [[],0];
 
@@ -239,7 +290,7 @@ $filter = $_GET['status'] ?? '';
 [$messages,$messagesTotal] = ($tab==='messages') ? fetch_messages($conn,$mPer,$mOff,$filter) : [[],0];
 
 // =======================
-// 7) Вьюха
+// 6) Вьюха (та же, что была; добавил два блока для управления админами)
 // =======================
 ?>
 <!doctype html>
@@ -287,13 +338,14 @@ $filter = $_GET['status'] ?? '';
       <li><a href="admin.php?tab=courses" class="<?= $tab==='courses'?'active':'' ?>">Курсы</a></li>
       <li><a href="admin.php?tab=reviews" class="<?= $tab==='reviews'?'active':'' ?>">Отзывы</a></li>
       <li><a href="admin.php?tab=messages" class="<?= $tab==='messages'?'active':'' ?>">Сообщения</a></li>
+      <li><a href="admin.php?tab=admins" class="<?= $tab==='admins'?'active':'' ?>">Администраторы</a></li>
       <li><a href="admin.php?logout=1">Выход</a></li>
     </ul>
   </aside>
 
   <main class="admin-main">
     <?php if (!empty($_SESSION['flash'])): foreach($_SESSION['flash'] as [$t,$m]): ?>
-      <div class="flash flash-<?= e($t) ?>"><?= e($m) ?></div>
+      <div class="flash flash-<?= e($t) ?>"><?= $m ?></div>
     <?php endforeach; unset($_SESSION['flash']); endif; ?>
 
     <div class="stats-grid">
@@ -339,14 +391,6 @@ $filter = $_GET['status'] ?? '';
           <?php endforeach; ?>
           </tbody>
         </table>
-        <?php if ($tab==='bookings'): 
-          $pages = max(1, (int)ceil($bookingsTotal/$bPer)); ?>
-          <div class="pagination" style="margin-top:.7rem">
-            <?php for($i=1;$i<=$pages;$i++): ?>
-              <a class="<?= $i===$bPage?'active':'' ?>" href="admin.php?tab=bookings&bpage=<?= $i ?>"><?= $i ?></a>
-            <?php endfor; ?>
-          </div>
-        <?php endif; ?>
       </section>
     <?php endif; ?>
 
@@ -403,7 +447,7 @@ $filter = $_GET['status'] ?? '';
             </table>
           </div>
           <div>
-            <h4 style="margin:.3rem 0  .6rem">Добавить курс</h4>
+            <h4 style="margin:.3rem 0 .6rem">Добавить курс</h4>
             <form method="post">
               <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
               <input type="hidden" name="action" value="add_course">
@@ -452,7 +496,7 @@ $filter = $_GET['status'] ?? '';
                   <input type="hidden" name="action" value="mark_message">
                   <input type="hidden" name="msg_id" value="<?= (int)$m['id'] ?>">
                   <select name="to">
-                    <?php foreach (['new'=>'new','read'=>'read','replied'=>'replied'] as $opt): ?>
+                    <?php foreach (['new','read','replied'] as $opt): ?>
                       <option value="<?= $opt ?>" <?= $m['status']===$opt?'selected':'' ?>><?= $opt ?></option>
                     <?php endforeach; ?>
                   </select>
@@ -463,13 +507,43 @@ $filter = $_GET['status'] ?? '';
           <?php endforeach; ?>
           </tbody>
         </table>
-        <?php $pages=max(1,(int)ceil($messagesTotal/$mPer)); if ($pages>1): ?>
-          <div class="pagination" style="margin-top:.7rem">
-            <?php for($i=1;$i<=$pages;$i++): ?>
-              <a class="<?= $i===$mPage?'active':'' ?>" href="admin.php?tab=messages&mpage=<?= $i ?><?= $filter?('&status='.e($filter)) : '' ?>"><?= $i ?></a>
-            <?php endfor; ?>
+      </section>
+    <?php endif; ?>
+
+    <?php if ($tab==='admins'): ?>
+      <section class="admin-section" id="admins">
+        <h3 style="margin-bottom:.6rem">Администраторы</h3>
+        <div class="grid-2">
+          <div>
+            <table class="table">
+              <thead><tr><th>Логин</th><th>Создан</th></tr></thead>
+              <tbody>
+              <?php foreach ($conn->query("SELECT username, created_at FROM admins ORDER BY username ASC") as $a): ?>
+                <tr><td><?= e($a['username']) ?></td><td><?= e($a['created_at']) ?></td></tr>
+              <?php endforeach; ?>
+              </tbody>
+            </table>
           </div>
-        <?php endif; ?>
+          <div>
+            <h4 style="margin:.3rem 0 .6rem">Добавить администратора</h4>
+            <form method="post">
+              <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
+              <input type="hidden" name="action" value="add_admin">
+              <div class="form-group"><label>Логин *</label><input name="new_username" required></div>
+              <div class="form-group"><label>Пароль *</label><input type="text" name="new_password" required></div>
+              <button class="btn btn-primary">Добавить</button>
+            </form>
+
+            <h4 style="margin:1.2rem 0 .6rem">Сменить свой пароль</h4>
+            <form method="post">
+              <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
+              <input type="hidden" name="action" value="change_password">
+              <div class="form-group"><label>Старый пароль *</label><input type="password" name="old_password" required></div>
+              <div class="form-group"><label>Новый пароль *</label><input type="password" name="new_password" required></div>
+              <button class="btn btn-primary">Обновить</button>
+            </form>
+          </div>
+        </div>
       </section>
     <?php endif; ?>
 
