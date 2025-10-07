@@ -86,6 +86,8 @@ CREATE TABLE IF NOT EXISTS admins (
 
 
 insert into admins (username, password_hash) VALUES ("bytkie", "bserg_5xg3D11")
+
+
 -- Вставка тестовых данных для курсов
 INSERT INTO courses (name, description, category, duration, lessons, price, image) VALUES
 ('Базовый курс категории B', 'Полный курс обучения вождению для получения прав категории B. Включает теорию и практику.', 'Категория B', 40, 30, 450.00, 'course-basic-b.jpg'),
